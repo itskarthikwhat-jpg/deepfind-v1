@@ -2,7 +2,7 @@
 ingestion_service.py
 ---------------------
 HP's module: file watcher, system health throttle, text extraction,
-and queue orchestration for the offline semantic search app.
+and queue orchestration for the offline meaning-based search app.
 
 Public API (per team contract):
     start_watcher(paths: list[str])

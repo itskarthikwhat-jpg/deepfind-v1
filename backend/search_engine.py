@@ -14,6 +14,7 @@ import sys
 import time
 import uuid
 import os
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -42,7 +43,7 @@ class SearchResult:
     file_type: str
     snippet: str
     score: float
-    match_type: str  # "semantic" | "keyword" | "hybrid"
+    match_type: str  # "meaning" | "keyword" | "hybrid" | "regex"
 
 
 class FileRecord(LanceModel):
@@ -77,6 +78,7 @@ def init_db(db_path: str):
     try:
         _table.create_fts_index("content",  replace=True)
         _table.create_fts_index("file_name",  replace=True)
+        _table.create_fts_index("file_path",  replace=True)
     except Exception as e:
         _log_error("create_fts_index failed (FTS/keyword search will be unavailable)", e)
 
@@ -149,35 +151,81 @@ def search(
     limit: int = 20,
     min_similarity: float = MIN_COSINE_SIMILARITY,
     file_types: Optional[set[str]] = None,
+    search_field: str = "all",
+    regex: bool = False,
 ) -> list:
-    """Run keyword (FTS) + vector (CLIP text) search in parallel and fuse with RRF.
+    """Search selected file fields with meaning, keyword, or regex matching.
 
     min_similarity: cosine-similarity floor (0-1). Vector hits below this are
-    dropped before fusion so a lone weak semantic match can't surface a doc
+    dropped before fusion so a lone weak meaning match can't surface a doc
     that has nothing genuinely relevant to the query.
     """
     _ensure_ready()
 
+    fields_by_scope = {
+        "all": ("file_name", "file_path", "content"),
+        "file_name": ("file_name",),
+        "file_path": ("file_path",),
+        "content": ("content",),
+    }
+    if search_field not in fields_by_scope:
+        raise ValueError("Unsupported search field")
+
+    if regex:
+        try:
+            pattern = re.compile(query_str)
+        except re.error as exc:
+            raise ValueError(f"Invalid regular expression: {exc.msg}") from exc
+
+        rows = _table.to_arrow().to_pylist()
+        matches = []
+        for row in rows:
+            if file_types is not None and row.get("file_type") not in file_types:
+                continue
+            if not any(pattern.search(row.get(field) or "") for field in fields_by_scope[search_field]):
+                continue
+            snippet_field = search_field if search_field in {"file_name", "file_path"} else "content"
+            matches.append(
+                SearchResult(
+                    file_name=row["file_name"],
+                    file_path=row["file_path"],
+                    file_type=row["file_type"],
+                    snippet=_snippet(row.get(snippet_field) or ""),
+                    score=1.0,
+                    match_type="regex",
+                )
+            )
+        matches.sort(key=lambda result: result.file_path.casefold())
+        return matches[:limit]
+
+    fts_columns = None if search_field == "all" else search_field
+    vector_enabled = search_field == "all"
+
     try:
-        kw_results = (
-            _table.search(query_str, query_type="fts")
-            .limit(limit * 2)
-            .to_list()
-        )
+        if fts_columns is None:
+            keyword_search = _table.search(query_str, query_type="fts")
+        else:
+            keyword_search = _table.search(
+                query_str, query_type="fts", fts_columns=fts_columns
+            )
+        kw_results = keyword_search.limit(limit * 2).to_list()
     except Exception as e:
         _log_error("FTS/keyword search failed, falling back to vector-only results", e)
         kw_results = []
 
-    try:
-        query_vector = next(_get_encoder().embed([query_str])).tolist()
-        raw_vec_results = (
-            _table.search(query_vector)
-            .metric("cosine")
-            .limit(limit * 2)
-            .to_list()
-        )
-    except Exception as e:
-        _log_error("vector search unavailable, using keyword results", e)
+    if vector_enabled:
+        try:
+            query_vector = next(_get_encoder().embed([query_str])).tolist()
+            raw_vec_results = (
+                _table.search(query_vector)
+                .metric("cosine")
+                .limit(limit * 2)
+                .to_list()
+            )
+        except Exception as e:
+            _log_error("vector search unavailable, using keyword results", e)
+            raw_vec_results = []
+    else:
         raw_vec_results = []
 
     if file_types is not None:
@@ -205,7 +253,7 @@ def search(
         row = by_id[_id]
         in_kw = _id in kw_ids
         in_vec = _id in vec_ids
-        match_type = "hybrid" if (in_kw and in_vec) else ("keyword" if in_kw else "semantic")
+        match_type = "hybrid" if (in_kw and in_vec) else ("keyword" if in_kw else "meaning")
 
         results.append(
             SearchResult(

@@ -45,7 +45,12 @@ class RevealPayload(BaseModel):
     file_path: str
 
 @app.get("/api/search")
-def search(q: str, filters: str = ""):
+def search(
+    q: str,
+    filters: str = "",
+    field: Literal["all", "file_name", "file_path", "content"] = "all",
+    regex: bool = False,
+):
     if not q.strip():
         return []
     selected_filters = {item.strip() for item in filters.split(",") if item.strip()}
@@ -58,7 +63,14 @@ def search(q: str, filters: str = ""):
         else set().union(*FILE_TYPES_BY_FILTER.values())
     )
     try:
-        return [asdict(result) for result in search_engine.search(q, file_types=file_types)]
+        return [
+            asdict(result)
+            for result in search_engine.search(
+                q, file_types=file_types, search_field=field, regex=regex
+            )
+        ]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

@@ -1,6 +1,6 @@
-# DeepFind AI — Offline Semantic File Search
+# DeepFind AI — Offline Meaning-Based File Search
 
-Local, offline, CPU-only desktop app for hybrid keyword + AI semantic search over your files. Built with Tauri + React + FastAPI + LanceDB.
+Local, offline, CPU-only desktop app for hybrid keyword + AI meaning-based search over your files. Built with Tauri + React + FastAPI + LanceDB.
 
 ## Team & Modules
 
@@ -88,7 +88,7 @@ Search results (Appu -> Karthik) look like:
     "file_type": str,
     "snippet": str,
     "score": float,
-    "match_type": "semantic" | "keyword" | "hybrid",
+    "match_type": "meaning" | "keyword" | "hybrid" | "regex",
 }
 ```
 

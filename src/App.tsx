@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, type FormEvent } from "react";
 import {
   Search,
   Settings,
@@ -28,6 +28,15 @@ interface SystemStatus {
   is_paused: boolean;
 }
 
+type SearchField = "all" | "file_name" | "file_path" | "content";
+
+interface SearchRequest {
+  query: string;
+  field: SearchField;
+  regex: boolean;
+  filters: string[];
+}
+
 const MAX_RRF_SCORE = 2 / 61;
 
 const formatMatchScore = (score: number) => {
@@ -52,6 +61,9 @@ const iconFor = (type: string) => {
 
 export default function App() {
   const [query, setQuery] = useState("receipt");
+  const [searchField, setSearchField] = useState<SearchField>("all");
+  const [regexEnabled, setRegexEnabled] = useState(false);
+  const [searchRequest, setSearchRequest] = useState<SearchRequest | null>(null);
   const [activeFilters, setActiveFilters] = useState<string[]>(["images", "documents"]);
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -69,13 +81,14 @@ export default function App() {
   const [settingsError, setSettingsError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!query.trim()) {
+    if (!searchRequest) return;
+    if (!searchRequest.query.trim()) {
       setResults([]);
       setSearchError(null);
       setIsSearching(false);
       return;
     }
-    if (activeFilters.length === 0) {
+    if (searchRequest.filters.length === 0) {
       setResults([]);
       setSearchError(null);
       setIsSearching(false);
@@ -86,16 +99,34 @@ export default function App() {
       setIsSearching(true);
       setSearchError(null);
       try {
-        const params = new URLSearchParams({ q: query, filters: activeFilters.join(",") });
+        const params = new URLSearchParams({
+          q: searchRequest.query,
+          filters: searchRequest.filters.join(","),
+          field: searchRequest.field,
+          regex: String(searchRequest.regex),
+        });
         const res = await fetch(`http://localhost:8000/api/search?${params}`, {
           signal: controller.signal,
         });
-        if (!res.ok) throw new Error(`Search failed (${res.status})`);
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => null);
+          setSearchError(
+            typeof errorData?.detail === "string"
+              ? errorData.detail
+              : `Search failed (${res.status})`
+          );
+          setResults([]);
+          return;
+        }
         const data: SearchResult[] = await res.json();
         setResults(data);
       } catch (err) {
         if (!controller.signal.aborted) {
-          setSearchError("DeepFind could not reach the local search service.");
+          setSearchError(
+            err instanceof Error && err.message !== "Failed to fetch"
+              ? err.message
+              : "DeepFind could not reach the local search service."
+          );
           setResults([]);
         }
       } finally {
@@ -106,7 +137,7 @@ export default function App() {
       clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [query, activeFilters]);
+  }, [searchRequest]);
 
   useEffect(() => {
     const fetchStatus = async () => {
@@ -125,6 +156,16 @@ export default function App() {
     setActiveFilters((prev) =>
       prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id]
     );
+  };
+
+  const handleSearch = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSearchRequest({
+      query: query.trim(),
+      field: searchField,
+      regex: regexEnabled,
+      filters: activeFilters,
+    });
   };
 
   const handleReveal = async (filePath: string) => {
@@ -181,10 +222,17 @@ export default function App() {
         .df-filter-icon { width: 26px; height: 26px; border-radius: 999px; background: var(--icon-bg); display: flex; align-items: center; justify-content: center; color: var(--navy-900); }
         .df-filter-label { font-size: 13.5px; font-weight: 600; color: var(--navy-900); }
         .df-panel { background: linear-gradient(180deg, var(--navy-800), var(--navy-900)); margin: 0 44px 44px 44px; border-radius: 22px; padding: 30px 30px 20px 30px; flex: 1; display: flex; flex-direction: column; }
-        .df-searchbar { display: flex; align-items: center; gap: 12px; background: var(--navy-700); border-radius: 14px; padding: 15px 18px; margin-bottom: 22px; }
+        .df-search-form { margin-bottom: 22px; }
+        .df-searchbar { display: flex; align-items: center; gap: 12px; background: var(--navy-700); border-radius: 14px; padding: 15px 18px; margin-bottom: 12px; }
         .df-searchbar input { flex: 1; background: transparent; border: none; outline: none; color: #fff; font-size: 15px; font-style: italic; }
         .df-searchbar input::placeholder { color: var(--lavender-dim); font-style: italic; }
         .df-searchbar svg { color: var(--teal-soft); }
+        .df-search-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 0; border-radius: 8px; padding: 9px 14px; background: var(--teal-soft); color: var(--navy-900); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+        .df-search-button:disabled { opacity: 0.55; cursor: not-allowed; }
+        .df-search-options { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; color: var(--lavender); font-size: 13px; }
+        .df-search-options label { display: inline-flex; align-items: center; gap: 7px; }
+        .df-search-options select { min-height: 34px; border: 1px solid var(--navy-600); border-radius: 7px; padding: 5px 28px 5px 9px; background: var(--navy-700); color: #fff; font: inherit; }
+        .df-search-options input { accent-color: var(--teal); }
         .df-results { display: flex; flex-direction: column; gap: 10px; flex: 1; }
         .df-empty { color: var(--lavender); font-size: 14px; padding: 18px 4px; }
         .df-row { display: flex; align-items: center; gap: 14px; background: var(--navy-600); border-radius: 12px; padding: 14px 16px; cursor: pointer; }
@@ -212,6 +260,11 @@ export default function App() {
         .df-modal-slider { width: 100%; margin-top: 4px; }
         .df-modal-btn { background: var(--navy-900); color: #fff; border: none; padding: 12px; width: 100%; border-radius: 8px; font-weight: 600; cursor: pointer; margin-top: 10px; }
         .df-settings-error { color: #b42318; font-size: 13px; margin-top: 10px; }
+        @media (max-width: 600px) {
+          .df-searchbar { flex-wrap: wrap; }
+          .df-searchbar input { min-width: 140px; }
+          .df-search-button { margin-left: auto; }
+        }
       `}</style>
 
       {/* NEW: Settings Modal Overlay */}
@@ -298,21 +351,53 @@ export default function App() {
       </div>
 
       <div className="df-panel">
-        <div className="df-searchbar">
-          <Search size={17} />
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by what it means..." />
-        </div>
+        <form className="df-search-form" onSubmit={handleSearch}>
+          <div className="df-searchbar">
+            <Search size={17} />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by meaning..."
+              aria-label="Search query"
+            />
+            <button type="submit" className="df-search-button" disabled={!query.trim() || isSearching}>
+              <Search size={15} />
+              Search
+            </button>
+          </div>
+          <div className="df-search-options">
+            <label htmlFor="search-field">Search in</label>
+            <select
+              id="search-field"
+              value={searchField}
+              onChange={(event) => setSearchField(event.target.value as SearchField)}
+            >
+              <option value="all">All fields</option>
+              <option value="file_name">File name</option>
+              <option value="file_path">File path</option>
+              <option value="content">File content</option>
+            </select>
+            <label>
+              <input
+                type="checkbox"
+                checked={regexEnabled}
+                onChange={(event) => setRegexEnabled(event.target.checked)}
+              />
+              Regular expression
+            </label>
+          </div>
+        </form>
 
         <div className="df-results">
           {isSearching && <div className="df-empty">Searching your indexed files...</div>}
           {!isSearching && searchError && <div className="df-empty" role="alert">{searchError}</div>}
           {!isSearching && !searchError && results.length === 0 && (
             <div className="df-empty">
-              {activeFilters.length === 0
+              {(searchRequest?.filters ?? activeFilters).length === 0
                 ? "Choose at least one file type to search."
-                : query.trim()
+                : searchRequest?.query
                   ? "No matching files found."
-                  : "Type to search your indexed files."}
+                  : "Enter a query, choose a field, then click Search."}
             </div>
           )}
           {!isSearching && results.map((r, idx) => {

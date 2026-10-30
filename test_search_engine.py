@@ -26,8 +26,8 @@ print("--- keyword search: 'Python' ---")
 for r in appu.search("Python"):
     print(r)
 
-# Semantic match test (no exact keyword overlap)
-print("\n--- semantic search: 'data science skills' ---")
+# Meaning match test (no exact keyword overlap)
+print("\n--- meaning search: 'data science skills' ---")
 for r in appu.search("data science skills"):
     print(r)
 
